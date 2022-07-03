@@ -1,0 +1,130 @@
+StartAt: Get image layers
+States:
+  Concatenate indexes:
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: Report failure
+        ResultPath: $.Error
+    Next: Report success
+    OutputPath: $.Payload
+    Parameters:
+      FunctionName: ${Concatenator}
+      Payload:
+        Key:
+          Digest.$: $.Digest
+          Repo.$: $.Repo
+        Layers.$: $.ImageLayers.Payload.Layers
+    Resource: arn:aws:states:::lambda:invoke
+    Retry:
+      - BackoffRate: 2
+        ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 6
+    Type: Task
+  Fail:
+    Type: Fail
+  For each layer:
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: Report failure
+        ResultPath: $.Error
+    ItemsPath: $.ImageLayers.Payload.Layers
+    Iterator:
+      StartAt: Index layer tar.gz
+      States:
+        Index layer tar.gz:
+          End: true
+          OutputPath: $.Payload
+          Parameters:
+            FunctionName: ${LayerReader}
+            Payload.$: $
+          Resource: arn:aws:states:::lambda:invoke
+          Retry:
+            - BackoffRate: 2
+              ErrorEquals:
+                - Lambda.ServiceException
+                - Lambda.AWSLambdaException
+                - Lambda.SdkClientException
+                - Lambda.TooManyRequestsException
+              IntervalSeconds: 2
+              MaxAttempts: 6
+          Type: Task
+    Next: Concatenate indexes
+    Parameters:
+      Key:
+        Digest.$: $.Digest
+        Repo.$: $.Repo
+      Layer.$: $$.Map.Item.Value
+    ResultPath: $.Indexes
+    Type: Map
+  Get image layers:
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: Report failure
+        ResultPath: $.Error
+    Next: For each layer
+    Parameters:
+      FunctionName: ${LayerLister}
+      Payload.$: $
+    Resource: arn:aws:states:::lambda:invoke
+    ResultPath: $.ImageLayers
+    Retry:
+      - BackoffRate: 2
+        ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 6
+    Type: Task
+  Report failure:
+    Next: Fail
+    OutputPath: $.Payload
+    Parameters:
+      FunctionName: ${Finalizer}
+      Payload:
+        Meta:
+          Error.$: $.Error
+          ExecutionId.$: $$.Execution.Name
+          StartTime.$: $$.Execution.StartTime
+        Payload.$: $$.Execution.Input
+    Resource: arn:aws:states:::lambda:invoke
+    Retry:
+      - BackoffRate: 2
+        ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 6
+    Type: Task
+  Report success:
+    End: true
+    OutputPath: $.Payload
+    Parameters:
+      FunctionName: ${Finalizer}
+      Payload:
+        Meta:
+          ExecutionId.$: $$.Execution.Name
+          StartTime.$: $$.Execution.StartTime
+        Payload.$: $$.Execution.Input
+    Resource: arn:aws:states:::lambda:invoke
+    Retry:
+      - BackoffRate: 2
+        ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 6
+    Type: Task
