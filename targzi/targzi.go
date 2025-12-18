@@ -55,11 +55,13 @@ func ReadIndex(dir string) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening file index: %w", err)
 	}
+	defer findex.Close()
 
 	gzr, err := gzip.NewReader(findex)
 	if err != nil {
 		return nil, fmt.Errorf("gunzipping file index: %w", err)
 	}
+	defer gzr.Close()
 
 	entries := []*Entry{}
 
@@ -68,7 +70,7 @@ func ReadIndex(dir string) (*Index, error) {
 		e := Entry{}
 		err = json.Unmarshal(scan.Bytes(), &e)
 		if err != nil {
-			return nil, fmt.Errorf(": %w", err)
+			return nil, fmt.Errorf("unmarshalling entry: %w", err)
 		}
 
 		entries = append(entries, &e)

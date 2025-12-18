@@ -71,12 +71,12 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 			Key:    aws.String(fmt.Sprintf("layers/%s/files.json.gz", hash)),
 		})
 		if err != nil {
-			return nil, fmt.Errorf(": %w", err)
+			return nil, fmt.Errorf("downloading layer files index: %w", err)
 		}
 
 		gzr, err := gzip.NewReader(bytes.NewReader(w.Bytes()))
 		if err != nil {
-			return nil, fmt.Errorf(": %w", err)
+			return nil, fmt.Errorf("creating gzip reader: %w", err)
 		}
 
 		scan := bufio.NewScanner(gzr)
@@ -84,7 +84,7 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 			e := targzi.Entry{}
 			err = json.Unmarshal(scan.Bytes(), &e)
 			if err != nil {
-				return nil, fmt.Errorf(": %w", err)
+				return nil, fmt.Errorf("unmarshalling entry: %w", err)
 			}
 
 			base := filepath.Base(e.Hdr.Name)
@@ -103,8 +103,10 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 				}
 			} else if strings.HasPrefix(base, layerreader.WhiteoutPrefix) {
 				name := strings.TrimPrefix(base, layerreader.WhiteoutPrefix)
-				delete(fileMap, name)
-				fmt.Printf("deleting %s\n", name)
+				dir := filepath.Dir(e.Hdr.Name)
+				fullPath := filepath.Join(dir, name)
+				delete(fileMap, fullPath)
+				fmt.Printf("deleting %s\n", fullPath)
 			} else {
 				fileMap[e.Hdr.Name] = &entryWithLayer{Entry: e, Layer: hash.String()}
 			}
@@ -132,7 +134,7 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 
 	err := gzw.Close()
 	if err != nil {
-		return nil, fmt.Errorf(": %w", err)
+		return nil, fmt.Errorf("closing gzip writer: %w", err)
 	}
 
 	upload, err := ll.uploader.Upload(ctx, &s3.PutObjectInput{
@@ -141,7 +143,7 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 		Body:   buf,
 	})
 	if err != nil {
-		return nil, fmt.Errorf(": %w", err)
+		return nil, fmt.Errorf("uploading combined index: %w", err)
 	}
 
 	return &concatenatorOutput{
