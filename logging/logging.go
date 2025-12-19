@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/aws/aws-lambda-go/lambdacontext"
 	slogctx "github.com/veqryn/slog-context"
 )
 
@@ -25,6 +26,16 @@ func Init() {
 		},
 	)
 	slog.SetDefault(slog.New(handler))
+}
+
+// Middleware wraps a Lambda handler to inject the Lambda request ID into the logging context.
+func Middleware[T any, R any](handler func(context.Context, T) (R, error)) func(context.Context, T) (R, error) {
+	return func(ctx context.Context, input T) (R, error) {
+		if lc, ok := lambdacontext.FromContext(ctx); ok {
+			ctx = slogctx.Prepend(ctx, "requestId", lc.AwsRequestID)
+		}
+		return handler(ctx, input)
+	}
 }
 
 // WithRequestPayload adds the Lambda request payload to the context for logging.

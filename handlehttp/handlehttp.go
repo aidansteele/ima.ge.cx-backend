@@ -14,6 +14,8 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-lambda-go/lambdacontext"
+	slogctx "github.com/veqryn/slog-context"
 )
 
 func WrapHandler(h http.Handler) lambda.Handler {
@@ -38,6 +40,9 @@ type inputPayload struct {
 }
 
 func (h *handler) Invoke(ctx context.Context, payload []byte) ([]byte, error) {
+	if lc, ok := lambdacontext.FromContext(ctx); ok {
+		ctx = slogctx.Prepend(ctx, "requestId", lc.AwsRequestID)
+	}
 	slog.InfoContext(ctx, "received Lambda invocation", "payload", string(payload))
 
 	input := inputPayload{}

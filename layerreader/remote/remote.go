@@ -52,7 +52,7 @@ func main() {
 		table: os.Getenv("TABLE"),
 	}
 
-	lambda.Start(d.handle)
+	lambda.Start(logging.Middleware(d.handle))
 }
 
 type downloader struct {

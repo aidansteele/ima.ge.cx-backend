@@ -89,5 +89,5 @@ func main() {
 		table:  os.Getenv("TABLE"),
 	}
 
-	lambda.Start(f.handle)
+	lambda.Start(logging.Middleware(f.handle))
 }

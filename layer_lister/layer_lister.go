@@ -33,7 +33,7 @@ func main() {
 		table:    os.Getenv("TABLE"),
 	}
 
-	lambda.Start(l.handle)
+	lambda.Start(logging.Middleware(l.handle))
 }
 
 type layerListerInput struct {

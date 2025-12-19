@@ -42,7 +42,7 @@ func main() {
 		downloader: manager.NewDownloader(api),
 		bucket:     os.Getenv("BUCKET"),
 	}
-	lambda.Start(c.handle)
+	lambda.Start(logging.Middleware(c.handle))
 }
 
 type concatenatorInput struct {
