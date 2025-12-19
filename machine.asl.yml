@@ -1,21 +1,19 @@
+QueryLanguage: JSONata
 StartAt: Get image layers
 States:
-  Concatenate indexes:
-    Catch:
-      - ErrorEquals:
-          - States.ALL
-        Next: Report failure
-        ResultPath: $.Error
-    Next: Report success
-    OutputPath: $.Payload
-    Parameters:
-      FunctionName: ${Concatenator}
-      Payload:
-        Key:
-          Digest.$: $.Digest
-          Repo.$: $.Repo
-        Layers.$: $.ImageLayers.Payload.Layers
+  Get image layers:
+    Type: Task
     Resource: arn:aws:states:::lambda:invoke
+    Arguments:
+      FunctionName: ${LayerLister}
+      Payload:
+        Repo: "{% $states.input.Repo %}"
+        Digest: "{% $states.input.Digest %}"
+        ExecutionName: "{% $states.context.Execution.Name %}"
+    Output:
+      Repo: "{% $states.input.Repo %}"
+      Digest: "{% $states.input.Digest %}"
+      ImageLayers: "{% $states.result.Payload %}"
     Retry:
       - BackoffRate: 2
         ErrorEquals:
@@ -25,26 +23,33 @@ States:
           - Lambda.TooManyRequestsException
         IntervalSeconds: 2
         MaxAttempts: 6
-    Type: Task
-  Fail:
-    Type: Fail
-  For each layer:
     Catch:
       - ErrorEquals:
           - States.ALL
         Next: Report failure
-        ResultPath: $.Error
-    ItemsPath: $.ImageLayers.Payload.Layers
-    Iterator:
+        Output:
+          Error: "{% $states.errorOutput %}"
+    Next: For each layer
+
+  For each layer:
+    Type: Map
+    Items: "{% $states.input.ImageLayers.Layers %}"
+    ItemSelector:
+      Key:
+        Repo: "{% $states.input.Repo %}"
+        Digest: "{% $states.input.Digest %}"
+      Layer: "{% $states.context.Map.Item.Value %}"
+      ExecutionName: "{% $states.context.Execution.Name %}"
+    ItemProcessor:
       StartAt: Index layer tar.gz
       States:
         Index layer tar.gz:
-          End: true
-          OutputPath: $.Payload
-          Parameters:
-            FunctionName: ${LayerReader}
-            Payload.$: $
+          Type: Task
           Resource: arn:aws:states:::lambda:invoke
+          Arguments:
+            FunctionName: ${LayerReader}
+            Payload: "{% $states.input %}"
+          Output: "{% $states.result.Payload %}"
           Retry:
             - BackoffRate: 2
               ErrorEquals:
@@ -54,49 +59,32 @@ States:
                 - Lambda.TooManyRequestsException
               IntervalSeconds: 2
               MaxAttempts: 6
-          Type: Task
-    Next: Concatenate indexes
-    Parameters:
-      Key:
-        Digest.$: $.Digest
-        Repo.$: $.Repo
-      Layer.$: $$.Map.Item.Value
-    ResultPath: $.Indexes
-    Type: Map
-  Get image layers:
+          End: true
+    Output:
+      Repo: "{% $states.input.Repo %}"
+      Digest: "{% $states.input.Digest %}"
+      ImageLayers: "{% $states.input.ImageLayers %}"
+      Indexes: "{% $states.result %}"
     Catch:
       - ErrorEquals:
           - States.ALL
         Next: Report failure
-        ResultPath: $.Error
-    Next: For each layer
-    Parameters:
-      FunctionName: ${LayerLister}
-      Payload.$: $
-    Resource: arn:aws:states:::lambda:invoke
-    ResultPath: $.ImageLayers
-    Retry:
-      - BackoffRate: 2
-        ErrorEquals:
-          - Lambda.ServiceException
-          - Lambda.AWSLambdaException
-          - Lambda.SdkClientException
-          - Lambda.TooManyRequestsException
-        IntervalSeconds: 2
-        MaxAttempts: 6
+        Output:
+          Error: "{% $states.errorOutput %}"
+    Next: Concatenate indexes
+
+  Concatenate indexes:
     Type: Task
-  Report failure:
-    Next: Fail
-    OutputPath: $.Payload
-    Parameters:
-      FunctionName: ${Finalizer}
+    Resource: arn:aws:states:::lambda:invoke
+    Arguments:
+      FunctionName: ${Concatenator}
       Payload:
-        Meta:
-          Error.$: $.Error
-          ExecutionId.$: $$.Execution.Name
-          StartTime.$: $$.Execution.StartTime
-        Payload.$: $$.Execution.Input
-    Resource: arn:aws:states:::lambda:invoke
+        Key:
+          Repo: "{% $states.input.Repo %}"
+          Digest: "{% $states.input.Digest %}"
+        Layers: "{% $states.input.ImageLayers.Layers %}"
+        ExecutionName: "{% $states.context.Execution.Name %}"
+    Output: "{% $states.result.Payload %}"
     Retry:
       - BackoffRate: 2
         ErrorEquals:
@@ -106,18 +94,26 @@ States:
           - Lambda.TooManyRequestsException
         IntervalSeconds: 2
         MaxAttempts: 6
-    Type: Task
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: Report failure
+        Output:
+          Error: "{% $states.errorOutput %}"
+    Next: Report success
+
   Report success:
-    End: true
-    OutputPath: $.Payload
-    Parameters:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Arguments:
       FunctionName: ${Finalizer}
       Payload:
+        Payload: "{% $states.context.Execution.Input %}"
         Meta:
-          ExecutionId.$: $$.Execution.Name
-          StartTime.$: $$.Execution.StartTime
-        Payload.$: $$.Execution.Input
-    Resource: arn:aws:states:::lambda:invoke
+          ExecutionId: "{% $states.context.Execution.Name %}"
+          StartTime: "{% $states.context.Execution.StartTime %}"
+        ExecutionName: "{% $states.context.Execution.Name %}"
+    Output: "{% $states.result.Payload %}"
     Retry:
       - BackoffRate: 2
         ErrorEquals:
@@ -127,4 +123,31 @@ States:
           - Lambda.TooManyRequestsException
         IntervalSeconds: 2
         MaxAttempts: 6
+    End: true
+
+  Report failure:
     Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Arguments:
+      FunctionName: ${Finalizer}
+      Payload:
+        Payload: "{% $states.context.Execution.Input %}"
+        Meta:
+          Error: "{% $states.input.Error %}"
+          ExecutionId: "{% $states.context.Execution.Name %}"
+          StartTime: "{% $states.context.Execution.StartTime %}"
+        ExecutionName: "{% $states.context.Execution.Name %}"
+    Output: "{% $states.result.Payload %}"
+    Retry:
+      - BackoffRate: 2
+        ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 6
+    Next: Fail
+
+  Fail:
+    Type: Fail
