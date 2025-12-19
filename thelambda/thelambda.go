@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"math/rand"
 	"net/http"
-	"net/http/httputil"
 	"os"
 	"strings"
 	"time"
@@ -552,22 +551,4 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", http.DetectContentType(extracted))
 	w.Write(extracted)
-}
-
-type transport struct {
-	http.RoundTripper
-}
-
-func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
-	dump, _ := httputil.DumpRequestOut(request, false)
-	slog.Debug("outgoing HTTP request", "dump", string(dump))
-
-	response, err := t.RoundTripper.RoundTrip(request)
-	if err != nil {
-		return nil, err
-	}
-
-	dump, _ = httputil.DumpResponse(response, false)
-	slog.Debug("incoming HTTP response", "dump", string(dump))
-	return response, nil
 }

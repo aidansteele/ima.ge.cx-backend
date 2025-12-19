@@ -117,8 +117,9 @@ type transport struct {
 }
 
 func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
+	ctx := request.Context()
 	dump, _ := httputil.DumpRequestOut(request, false)
-	slog.Debug("outgoing HTTP request", "dump", string(dump))
+	slog.DebugContext(ctx, "outgoing HTTP request", "dump", string(dump))
 
 	response, err := t.RoundTripper.RoundTrip(request)
 	if err != nil {
@@ -126,6 +127,6 @@ func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 
 	dump, _ = httputil.DumpResponse(response, false)
-	slog.Debug("incoming HTTP response", "dump", string(dump))
+	slog.DebugContext(ctx, "incoming HTTP response", "dump", string(dump))
 	return response, nil
 }

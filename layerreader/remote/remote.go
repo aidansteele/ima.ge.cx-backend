@@ -65,13 +65,14 @@ type downloader struct {
 type transport struct{}
 
 func (t transport) RoundTrip(request *http.Request) (*http.Response, error) {
+	ctx := request.Context()
 	dump, _ := httputil.DumpRequestOut(request, false)
-	slog.Debug("outgoing HTTP request", "dump", string(dump))
+	slog.DebugContext(ctx, "outgoing HTTP request", "dump", string(dump))
 
 	resp, err := http.DefaultTransport.RoundTrip(request)
 	if resp != nil {
 		dump, _ = httputil.DumpResponse(resp, false)
-		slog.Debug("incoming HTTP response", "dump", string(dump))
+		slog.DebugContext(ctx, "incoming HTTP response", "dump", string(dump))
 	}
 
 	return resp, err
@@ -86,7 +87,7 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 		return nil, fmt.Errorf("parsing ref: %w", err)
 	}
 
-	img, err := remote.Image(ref, remote.WithTransport(transport{}))
+	img, err := remote.Image(ref, remote.WithTransport(transport{}), remote.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("getting image for ref: %w", err)
 	}
