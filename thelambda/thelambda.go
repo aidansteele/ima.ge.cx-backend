@@ -10,6 +10,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math/rand"
+	"net/http"
+	"net/http/httputil"
+	"os"
+	"strings"
+	"time"
+
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -29,14 +37,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/gorilla/mux"
 	"github.com/oklog/ulid/v2"
-	"io"
-	"math/rand"
-	"net/http"
-	"net/http/httputil"
 	"oras.land/oras-go/v2/registry/remote/auth"
-	"os"
-	"strings"
-	"time"
 )
 
 func main() {
@@ -167,46 +168,51 @@ func (h *handler) handleLookup(w http.ResponseWriter, r *http.Request) {
 
 	opts := []imageOption{}
 
-	index, err := remote.Index(ref, h.remoteOptions(ctx)...)
+	desc, err := remote.Get(ref, h.remoteOptions(ctx)...)
 	if err != nil {
-		var es1 *remote.ErrSchema1
-		if errors.As(err, &es1) {
-			image, err := remote.Image(ref, h.remoteOptions(ctx)...)
-			if err != nil {
-				writeOutput(lookupOutput{Error: "look ma, no hands"})
-				return
-			}
-
-			digest, _ := image.Digest()
-			cf, _ := image.ConfigFile()
-
-			opts = append(opts, imageOption{
-				Digest: digest,
-				Platform: &v1.Platform{
-					Architecture: cf.Architecture,
-					OS:           cf.OS,
-					OSVersion:    cf.OSVersion,
-					Variant:      cf.Variant,
-				},
-			})
-
-			writeOutput(lookupOutput{Options: opts})
-			return
-		}
-
 		writeOutput(lookupOutput{Error: err.Error()})
 		return
 	}
 
-	im, err := index.IndexManifest()
-	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
-	}
+	// Check if this is an index (manifest list) or a single image
+	if desc.MediaType.IsIndex() {
+		index, err := desc.ImageIndex()
+		if err != nil {
+			writeOutput(lookupOutput{Error: err.Error()})
+			return
+		}
 
-	for _, manifest := range im.Manifests {
+		im, err := index.IndexManifest()
+		if err != nil {
+			writeOutput(lookupOutput{Error: err.Error()})
+			return
+		}
+
+		for _, manifest := range im.Manifests {
+			opts = append(opts, imageOption{
+				Digest:   manifest.Digest,
+				Platform: manifest.Platform,
+			})
+		}
+	} else {
+		// Single image manifest (v2 or schema1)
+		image, err := desc.Image()
+		if err != nil {
+			writeOutput(lookupOutput{Error: err.Error()})
+			return
+		}
+
+		digest, _ := image.Digest()
+		cf, _ := image.ConfigFile()
+
 		opts = append(opts, imageOption{
-			Digest:   manifest.Digest,
-			Platform: manifest.Platform,
+			Digest: digest,
+			Platform: &v1.Platform{
+				Architecture: cf.Architecture,
+				OS:           cf.OS,
+				OSVersion:    cf.OSVersion,
+				Variant:      cf.Variant,
+			},
 		})
 	}
 
