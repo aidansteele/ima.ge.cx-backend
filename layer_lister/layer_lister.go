@@ -59,7 +59,7 @@ func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any
 
 	layers, err := img.Layers()
 	if err != nil {
-		return nil, fmt.Errorf(": %w", err)
+		return nil, fmt.Errorf("getting layers: %w", err)
 	}
 
 	digests := []string{}
@@ -71,7 +71,7 @@ func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any
 
 		digest, err := layer.Digest()
 		if err != nil {
-			return nil, fmt.Errorf(": %w", err)
+			return nil, fmt.Errorf("getting layer digest: %w", err)
 		}
 
 		digests = append(digests, digest.String())
@@ -84,12 +84,12 @@ func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any
 
 	rawConfig, err := img.RawConfigFile()
 	if err != nil {
-		return nil, fmt.Errorf(": %w", err)
+		return nil, fmt.Errorf("getting raw config: %w", err)
 	}
 
 	manifest, err := img.RawManifest()
 	if err != nil {
-		return nil, fmt.Errorf(": %w", err)
+		return nil, fmt.Errorf("getting manifest: %w", err)
 	}
 
 	_, err = ll.dynamodb.UpdateItem(ctx, &dynamodb.UpdateItemInput{

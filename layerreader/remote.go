@@ -63,16 +63,7 @@ func (r Remote) ReadLayer(ctx context.Context, key *bitypes.ImageInfoKey, layer 
 		return nil, fmt.Errorf("unmarshalling lambda response: %w", err)
 	}
 
-	//zr, err := zstd.NewReader(bytes.NewReader(ro.Zstd))
-	//if err != nil {
-	//	return nil, fmt.Errorf("initialising zstd reader: %w", err)
-	//}
-
-	output := []MyTarHeader{}
-	err = json.NewDecoder(nil).Decode(&output)
-	if err != nil {
-		return nil, fmt.Errorf("decoding json: %w", err)
-	}
-
-	return output, nil
+	// The lambda stores files to S3 and returns upload metadata.
+	// The actual headers are not returned through this function.
+	return nil, nil
 }

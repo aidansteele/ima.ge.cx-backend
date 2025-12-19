@@ -463,6 +463,7 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
 	}
+	defer os.Remove(indexFile.Name())
 
 	defer get.Body.Close()
 	_, err = io.Copy(indexFile, get.Body)
