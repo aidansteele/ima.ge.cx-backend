@@ -100,8 +100,9 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 				deletes := []string{}
 				deletedDir := strings.TrimSuffix(e.Hdr.Name, layerreader.WhiteoutOpaqueDir)
 				slog.DebugContext(ctx, "processing opaque whiteout directory", "dir", deletedDir)
-				for key := range fileMap {
-					if strings.HasPrefix(key, deletedDir) {
+				for key, entry := range fileMap {
+					// Only delete entries from previous layers, not from the current layer
+					if strings.HasPrefix(key, deletedDir) && entry.Layer != hash.String() {
 						deletes = append(deletes, key)
 					}
 				}
@@ -113,8 +114,11 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 				name := strings.TrimPrefix(base, layerreader.WhiteoutPrefix)
 				dir := filepath.Dir(e.Hdr.Name)
 				fullPath := filepath.Join(dir, name)
-				delete(fileMap, fullPath)
-				slog.DebugContext(ctx, "deleting whiteout file", "path", fullPath)
+				// Only delete if it's from a previous layer
+				if existing, ok := fileMap[fullPath]; ok && existing.Layer != hash.String() {
+					delete(fileMap, fullPath)
+					slog.DebugContext(ctx, "deleting whiteout file", "path", fullPath)
+				}
 			} else {
 				fileMap[e.Hdr.Name] = &entryWithLayer{Entry: e, Layer: hash.String()}
 			}
