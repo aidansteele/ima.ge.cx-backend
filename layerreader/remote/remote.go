@@ -3,9 +3,20 @@ package main
 import (
 	"browseimage/bitypes"
 	"browseimage/layerreader"
+	"browseimage/logging"
 	"browseimage/targzi"
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
+	"math/rand"
+	"net/http"
+	"net/http/httputil"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"time"
+
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
@@ -16,22 +27,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"io"
-	"math/rand"
-	"net/http"
-	"net/http/httputil"
-	"os"
-	"path/filepath"
-	"sync/atomic"
-	"time"
 )
 
 func main() {
+	logging.Init()
+
 	rand.Seed(time.Now().UnixNano())
 
 	ctx := context.Background()
 
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithClientLogMode(aws.LogRequest|aws.LogResponse))
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		panic(fmt.Sprintf("err %+v", err))
 	}
@@ -61,18 +66,21 @@ type transport struct{}
 
 func (t transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	dump, _ := httputil.DumpRequestOut(request, false)
-	fmt.Println(string(dump))
+	slog.Debug("outgoing HTTP request", "dump", string(dump))
 
 	resp, err := http.DefaultTransport.RoundTrip(request)
 	if resp != nil {
 		dump, _ = httputil.DumpResponse(resp, false)
-		fmt.Println(string(dump))
+		slog.Debug("incoming HTTP response", "dump", string(dump))
 	}
 
 	return resp, err
 }
 
 func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput) (*layerreader.RemoteOutput, error) {
+	ctx = logging.WithRequestPayload(ctx, input)
+	slog.InfoContext(ctx, "handling remote layer download request")
+
 	ref, err := name.ParseReference(fmt.Sprintf("%s@%s", input.Key.Repo, input.Key.Digest))
 	if err != nil {
 		return nil, fmt.Errorf("parsing ref: %w", err)

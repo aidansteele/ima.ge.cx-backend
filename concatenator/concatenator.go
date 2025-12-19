@@ -3,12 +3,19 @@ package main
 import (
 	"browseimage/bitypes"
 	"browseimage/layerreader"
+	"browseimage/logging"
 	"browseimage/targzi"
 	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -16,13 +23,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/klauspost/compress/gzip"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 )
 
 func main() {
+	logging.Init()
+
 	ctx := context.Background()
 
 	cfg, err := config.LoadDefaultConfig(ctx)
@@ -62,6 +67,9 @@ type entryWithLayer struct {
 }
 
 func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*concatenatorOutput, error) {
+	ctx = logging.WithRequestPayload(ctx, input)
+	slog.InfoContext(ctx, "handling concatenator request")
+
 	fileMap := map[string]*entryWithLayer{}
 
 	for _, hash := range input.Layers {
@@ -91,7 +99,7 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 			if base == layerreader.WhiteoutOpaqueDir {
 				deletes := []string{}
 				deletedDir := strings.TrimSuffix(e.Hdr.Name, layerreader.WhiteoutOpaqueDir)
-				fmt.Printf("need to delete dir %s\n", deletedDir)
+				slog.DebugContext(ctx, "processing opaque whiteout directory", "dir", deletedDir)
 				for key := range fileMap {
 					if strings.HasPrefix(key, deletedDir) {
 						deletes = append(deletes, key)
@@ -99,14 +107,14 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 				}
 				for _, del := range deletes {
 					delete(fileMap, del)
-					fmt.Printf("deleting (recursively) %s\n", del)
+					slog.DebugContext(ctx, "deleting recursively", "path", del)
 				}
 			} else if strings.HasPrefix(base, layerreader.WhiteoutPrefix) {
 				name := strings.TrimPrefix(base, layerreader.WhiteoutPrefix)
 				dir := filepath.Dir(e.Hdr.Name)
 				fullPath := filepath.Join(dir, name)
 				delete(fileMap, fullPath)
-				fmt.Printf("deleting %s\n", fullPath)
+				slog.DebugContext(ctx, "deleting whiteout file", "path", fullPath)
 			} else {
 				fileMap[e.Hdr.Name] = &entryWithLayer{Entry: e, Layer: hash.String()}
 			}

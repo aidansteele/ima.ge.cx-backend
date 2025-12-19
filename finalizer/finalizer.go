@@ -2,15 +2,18 @@ package main
 
 import (
 	"browseimage/bitypes"
+	"browseimage/logging"
 	"context"
 	"fmt"
+	"log/slog"
+	"os"
+	"time"
+
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"os"
-	"time"
 )
 
 type finalizer struct {
@@ -34,6 +37,9 @@ type FinalizerOutput struct {
 }
 
 func (f *finalizer) handle(ctx context.Context, input *FinalizerInput) (*FinalizerOutput, error) {
+	ctx = logging.WithRequestPayload(ctx, input)
+	slog.InfoContext(ctx, "handling finalizer request")
+
 	key := &bitypes.ImageInfoKey{
 		Repo:   input.Payload.Repo,
 		Digest: input.Payload.Digest,
@@ -69,12 +75,11 @@ func (f *finalizer) handle(ctx context.Context, input *FinalizerInput) (*Finaliz
 }
 
 func main() {
+	logging.Init()
+
 	ctx := context.Background()
 
-	opts := []func(*config.LoadOptions) error{
-		config.WithClientLogMode(aws.LogRequestWithBody | aws.LogResponseWithBody),
-	}
-	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		panic(err)
 	}

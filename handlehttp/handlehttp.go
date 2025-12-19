@@ -5,13 +5,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/aws/aws-lambda-go/events"
-	"github.com/aws/aws-lambda-go/lambda"
 	"io"
 	"io/ioutil"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+
+	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-lambda-go/lambda"
 )
 
 func WrapHandler(h http.Handler) lambda.Handler {
@@ -36,7 +38,7 @@ type inputPayload struct {
 }
 
 func (h *handler) Invoke(ctx context.Context, payload []byte) ([]byte, error) {
-	fmt.Println(string(payload))
+	slog.InfoContext(ctx, "received Lambda invocation", "payload", string(payload))
 
 	input := inputPayload{}
 	err := json.Unmarshal(payload, &input)

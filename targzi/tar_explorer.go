@@ -4,12 +4,14 @@ import (
 	"browseimage/s3select"
 	"context"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"os"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 type TarExplorer struct {
@@ -116,7 +118,7 @@ type transport struct {
 
 func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	dump, _ := httputil.DumpRequestOut(request, false)
-	fmt.Println(string(dump))
+	slog.Debug("outgoing HTTP request", "dump", string(dump))
 
 	response, err := t.RoundTripper.RoundTrip(request)
 	if err != nil {
@@ -124,6 +126,6 @@ func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 
 	dump, _ = httputil.DumpResponse(response, false)
-	fmt.Println(string(dump))
+	slog.Debug("incoming HTTP response", "dump", string(dump))
 	return response, nil
 }

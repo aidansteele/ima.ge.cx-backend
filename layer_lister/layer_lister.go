@@ -2,8 +2,12 @@ package main
 
 import (
 	"browseimage/bitypes"
+	"browseimage/logging"
 	"context"
 	"fmt"
+	"log/slog"
+	"os"
+
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -12,10 +16,11 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"os"
 )
 
 func main() {
+	logging.Init()
+
 	ctx := context.Background()
 
 	cfg, err := config.LoadDefaultConfig(ctx)
@@ -46,6 +51,9 @@ type layerLister struct {
 }
 
 func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any, error) {
+	ctx = logging.WithRequestPayload(ctx, input)
+	slog.InfoContext(ctx, "handling layer lister request")
+
 	refstr := fmt.Sprintf("%s@%s", input.Repo, input.Digest)
 	ref, err := name.ParseReference(refstr)
 	if err != nil {

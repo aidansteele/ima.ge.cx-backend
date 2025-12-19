@@ -4,6 +4,7 @@ import (
 	"browseimage/bitypes"
 	"browseimage/handlehttp"
 	"browseimage/layerreader"
+	"browseimage/logging"
 	"browseimage/s3select"
 	"browseimage/targzi"
 	"context"
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/http/httputil"
@@ -41,12 +43,13 @@ import (
 )
 
 func main() {
+	logging.Init()
+
 	ctx := context.Background()
 
 	emf.Namespace = "browseimage"
 
-	cfg, err := config.LoadDefaultConfig(ctx) //config.WithClientLogMode(aws.LogRequest|aws.LogResponse),
-
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
 	}
@@ -85,6 +88,15 @@ func main() {
 				query[k] = vs[0]
 			}
 
+			ctx := logging.WithAttrs(r.Context(),
+				"path", r.URL.Path,
+				"method", r.Method,
+				"query", query,
+			)
+			r = r.WithContext(ctx)
+
+			slog.InfoContext(ctx, "handling HTTP request")
+
 			defer func() {
 				rerr := recover()
 
@@ -100,6 +112,7 @@ func main() {
 
 				if rerr != nil {
 					msi["Error"] = fmt.Sprintf("%+v", rerr)
+					slog.ErrorContext(ctx, "request panicked", "error", rerr)
 					panic(rerr)
 				}
 			}()
@@ -512,14 +525,13 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	repo := ref.Context()
-	fmt.Printf("ref = %s\n context=%s\n registry=%s\n identifier=%s\n repostr=%s\n", ref, repo, repo.Registry, ref.Identifier(), repo.RepositoryStr())
-	/*
-		ref = mcr.microsoft.com/dotnet/sdk:6.0@sha256:4d21c1c3147d5239c8b4d71beec3d4eebb9ff8ac96690fe5af52f779b0decea5
-		 context=mcr.microsoft.com/dotnet/sdk
-		 registry=mcr.microsoft.com
-		 identifier=sha256:4d21c1c3147d5239c8b4d71beec3d4eebb9ff8ac96690fe5af52f779b0decea5
-		 repostr=dotnet/sdk
-	*/
+	slog.DebugContext(ctx, "parsed image reference",
+		"ref", ref.String(),
+		"context", repo.String(),
+		"registry", repo.Registry.String(),
+		"identifier", ref.Identifier(),
+		"repostr", repo.RepositoryStr(),
+	)
 
 	scope := ref.Scope("pull")
 	ctx = auth.WithScopes(ctx, scope)
@@ -548,7 +560,7 @@ type transport struct {
 
 func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	dump, _ := httputil.DumpRequestOut(request, false)
-	fmt.Println(string(dump))
+	slog.Debug("outgoing HTTP request", "dump", string(dump))
 
 	response, err := t.RoundTripper.RoundTrip(request)
 	if err != nil {
@@ -556,6 +568,6 @@ func (t *transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 
 	dump, _ = httputil.DumpResponse(response, false)
-	fmt.Println(string(dump))
+	slog.Debug("incoming HTTP response", "dump", string(dump))
 	return response, nil
 }

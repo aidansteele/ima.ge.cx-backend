@@ -1,6 +1,6 @@
 module browseimage
 
-go 1.18
+go 1.21
 
 require (
 	github.com/aws/aws-lambda-go v1.34.1
@@ -25,6 +25,7 @@ require (
 	github.com/oklog/ulid/v2 v2.0.2
 	github.com/opencontainers/image-spec v1.0.3-0.20220114050600-8b9d41f48198
 	github.com/stretchr/testify v1.7.2
+	github.com/veqryn/slog-context v0.8.0
 	oras.land/oras-go/v2 v2.0.0-20220622093312-9fc00616c490
 )
 
@@ -50,6 +51,7 @@ require (
 	github.com/docker/distribution v2.8.1+incompatible // indirect
 	github.com/docker/docker v20.10.16+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.6.4 // indirect
+	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
