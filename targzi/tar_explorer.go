@@ -53,6 +53,10 @@ func (te *TarExplorer) FileContents(ctx context.Context, key, file string) ([]by
 		te.gzIndexPath = indexFile.Name()
 	}
 
+	// Validate input to prevent SQL injection - reject quotes entirely
+	if strings.ContainsRune(file, '\'') {
+		return nil, fmt.Errorf("invalid character in file path")
+	}
 	escapedFile := strings.ReplaceAll(file, "'", "''")
 	query := fmt.Sprintf("SELECT * FROM s3object s WHERE s.Hdr.Name = '%s'", escapedFile)
 	entries, err := s3select.Select[Entry](ctx, te.s3, te.bucket, fmt.Sprintf("%s/files.json.gz", key), query)
@@ -120,6 +124,10 @@ func (te *TarExplorer) FileContents(ctx context.Context, key, file string) ([]by
 }
 
 func (te *TarExplorer) ListDirectory(ctx context.Context, key, dir string) ([]Entry, error) {
+	// Validate input to prevent SQL injection - reject quotes entirely
+	if strings.ContainsRune(dir, '\'') {
+		return nil, fmt.Errorf("invalid character in directory path")
+	}
 	escapedDir := strings.ReplaceAll(dir, "'", "''")
 	query := fmt.Sprintf("SELECT * FROM s3object s WHERE s.Parent = '%s'", escapedDir)
 	return s3select.Select[Entry](ctx, te.s3, te.bucket, fmt.Sprintf("%s/files.json.gz", key), query)
