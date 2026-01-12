@@ -149,10 +149,13 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 
 	gzf, err := os.Open(index.GzIndexPath)
 	if err != nil {
-		return nil, fmt.Errorf(": %w", err)
+		return nil, fmt.Errorf("opening gzip index file: %w", err)
 	}
 	defer gzf.Close()
-	gzfstat, _ := gzf.Stat()
+	gzfstat, err := gzf.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("getting gzip index file stats: %w", err)
+	}
 
 	gziPut, err := d.uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket: &d.bucket,
@@ -160,15 +163,18 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 		Body:   gzf,
 	})
 	if err != nil {
-		return nil, fmt.Errorf(": %w", err)
+		return nil, fmt.Errorf("uploading gzip index to S3: %w", err)
 	}
 
 	ff, err := os.Open(index.FileIndexPath)
 	if err != nil {
-		return nil, fmt.Errorf(": %w", err)
+		return nil, fmt.Errorf("opening file index: %w", err)
 	}
 	defer ff.Close()
-	ffstat, _ := ff.Stat()
+	ffstat, err := ff.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("getting file index stats: %w", err)
+	}
 
 	tarPut, err := d.uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket: &d.bucket,
@@ -176,7 +182,7 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 		Body:   ff,
 	})
 	if err != nil {
-		return nil, fmt.Errorf(": %w", err)
+		return nil, fmt.Errorf("uploading file index to S3: %w", err)
 	}
 
 	return &layerreader.RemoteOutput{
@@ -198,7 +204,7 @@ func (d *downloader) countProgress(ctx context.Context, byteCounter, fileCounter
 		byteCount := atomic.LoadInt64(byteCounter)
 		fileCount := atomic.LoadInt64(fileCounter)
 
-		_, err := d.dynamodb.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+		_, err := d.dynamodb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 			TableName:        &d.table,
 			Key:              key.Key(),
 			UpdateExpression: aws.String("SET CompletedBytes = :CompletedBytes, CompletedFiles = :CompletedFiles"),

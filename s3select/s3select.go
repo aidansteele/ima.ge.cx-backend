@@ -29,7 +29,7 @@ func Select[T any](ctx context.Context, api *s3.Client, bucket, key, query strin
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf(": %w", err)
+		return nil, fmt.Errorf("selecting object content: %w", err)
 	}
 
 	pr, pw := io.Pipe()
@@ -44,7 +44,7 @@ func Select[T any](ctx context.Context, api *s3.Client, bucket, key, query strin
 			line := scan.Bytes()
 			err = json.Unmarshal(line, &t)
 			if err != nil {
-				panic(fmt.Errorf(": %w", err))
+				panic(fmt.Errorf("unmarshalling JSON line: %w", err))
 			}
 
 			entries = append(entries, t)
