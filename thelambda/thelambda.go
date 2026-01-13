@@ -426,7 +426,8 @@ func (h *handler) handleListDirectory(w http.ResponseWriter, r *http.Request) {
 	}
 	defer emf.Emit(msi)
 
-	query := fmt.Sprintf("SELECT * FROM s3object s WHERE s.Parent = '%s'", path)
+	escapedPath := strings.ReplaceAll(path, "'", "''")
+	query := fmt.Sprintf("SELECT * FROM s3object s WHERE s.Parent = '%s'", escapedPath)
 	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, key, query)
 	if err != nil {
 		var ae smithy.APIError
@@ -458,7 +459,9 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) {
 
 	path := q.Get("path")
 
-	query := fmt.Sprintf("SELECT * FROM s3object s WHERE s.Hdr.Name = '%s'", path)
+	// Escape single quotes for S3 Select SQL (S3 Select uses '' escaping, not backslash)
+	escapedPath := strings.ReplaceAll(path, "'", "''")
+	query := fmt.Sprintf("SELECT * FROM s3object s WHERE s.Hdr.Name = '%s'", escapedPath)
 	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, key, query)
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
@@ -499,14 +502,20 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) {
 		panic(fmt.Errorf("reading spans: %w", err))
 	}
 
+	if len(entry.Spans) == 0 {
+		panic(fmt.Errorf("entry has no spans"))
+	}
+
 	//span := IndexSpan{}
 	start := 0
 	end := 0
+	firstSpan := entry.Spans[0]
+	lastSpan := entry.Spans[len(entry.Spans)-1]
 	for idx, s := range spans {
-		if s.Number == entry.Spans[0] {
+		if s.Number == firstSpan {
 			start = s.Compressed
 		}
-		if s.Number == entry.Spans[len(entry.Spans)-1] {
+		if s.Number == lastSpan {
 			if idx+1 < len(spans) {
 				end = spans[idx+1].Compressed
 			}
@@ -535,7 +544,10 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) {
 	scope := ref.Scope("pull")
 	ctx = auth.WithScopes(ctx, scope)
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://%s/v2/%s/blobs/%s", repo.RegistryStr(), repo.RepositoryStr(), entry.Layer), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://%s/v2/%s/blobs/%s", repo.RegistryStr(), repo.RepositoryStr(), entry.Layer), nil)
+	if err != nil {
+		panic(fmt.Errorf("creating HTTP request: %w", err))
+	}
 	req.Header.Set("Range", rangeHdr)
 
 	resp, err := h.http.Do(req)
