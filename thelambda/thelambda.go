@@ -417,15 +417,6 @@ func (h *handler) handleListDirectory(w http.ResponseWriter, r *http.Request) {
 		path = "/"
 	}
 
-	// Validate path contains only expected characters to prevent SQL injection
-	// S3 Select uses '' for quote escaping (not backslash), but we validate defensively
-	for _, r := range path {
-		if r == '\'' {
-			http.Error(w, "invalid character in path", http.StatusBadRequest)
-			return
-		}
-	}
-
 	msi := emf.MSI{
 		"Image":      image,
 		"Tag":        tag,
@@ -468,14 +459,7 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) {
 
 	path := q.Get("path")
 
-	// Validate path contains only expected characters to prevent SQL injection
-	for _, r := range path {
-		if r == '\'' {
-			http.Error(w, "invalid character in path", http.StatusBadRequest)
-			return
-		}
-	}
-
+	// Escape single quotes for S3 Select SQL (S3 Select uses '' escaping, not backslash)
 	escapedPath := strings.ReplaceAll(path, "'", "''")
 	query := fmt.Sprintf("SELECT * FROM s3object s WHERE s.Hdr.Name = '%s'", escapedPath)
 	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, key, query)
