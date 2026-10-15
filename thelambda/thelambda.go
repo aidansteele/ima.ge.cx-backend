@@ -119,6 +119,7 @@ func main() {
 					// and the client would get a 502, so respond with a 500 instead.
 					msi["Error"] = fmt.Sprintf("%+v", rerr)
 					slog.ErrorContext(ctx, "request panicked", "error", rerr, "stack", string(debug.Stack()))
+					w.Header().Set("Cache-Control", "no-store")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
 			}()
@@ -166,6 +167,9 @@ func withStatus(status int, err error) error {
 // Errors become 500 responses unless they carry a status via withStatus.
 func handleErrors(fn func(http.ResponseWriter, *http.Request) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Handlers opt successful responses into caching, including HTTP 200
+		// responses whose bodies may instead contain registry errors.
+		w.Header().Set("Cache-Control", "no-store")
 		err := fn(w, r)
 		if err == nil {
 			return
@@ -184,9 +188,14 @@ func handleErrors(fn func(http.ResponseWriter, *http.Request) error) http.Handle
 			level = slog.LevelWarn
 		}
 		slog.Log(r.Context(), level, "handling HTTP request", "error", err, "status", status)
+		w.Header().Set("Cache-Control", "no-store")
 		http.Error(w, msg, status)
 	}
 }
+
+// Indexer fixes can change the representation even though image bytes are immutable.
+// Keep browser freshness shorter so a CDN invalidation can expose corrected indexes.
+const indexedCacheControl = "public, max-age=86400, s-maxage=2592000"
 
 func writeJSON(w http.ResponseWriter, status int, v any) error {
 	j, err := json.Marshal(v)
@@ -249,13 +258,13 @@ func (h *handler) remoteOptions(ctx context.Context) []remote.Option {
 
 func (h *handler) handleLookup(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
-	w.Header().Set("Cache-Control", "max-age=60")
 
 	opts, err := h.lookupOptions(ctx, r.URL.Query().Get("image"))
 	if err != nil {
 		return writeJSON(w, http.StatusOK, lookupOutput{Error: err.Error()})
 	}
 
+	w.Header().Set("Cache-Control", "public, max-age=60")
 	return writeJSON(w, http.StatusOK, lookupOutput{Options: opts})
 }
 
@@ -335,7 +344,6 @@ type tagsOutput struct {
 // registry errors are reported in the body so the UI can show them.
 func (h *handler) handleTags(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
-	w.Header().Set("Cache-Control", "max-age=300")
 
 	ref, err := name.ParseReference(r.URL.Query().Get("image"))
 	if err != nil {
@@ -347,6 +355,7 @@ func (h *handler) handleTags(w http.ResponseWriter, r *http.Request) error {
 		return writeJSON(w, http.StatusOK, tagsOutput{Error: err.Error()})
 	}
 
+	w.Header().Set("Cache-Control", "public, max-age=300")
 	return writeJSON(w, http.StatusOK, tagsOutput{Tags: tags})
 }
 
@@ -523,9 +532,11 @@ func (h *handler) imageInfo(w http.ResponseWriter, r *http.Request, startIndexin
 		return h.handleStartExecution(&bitypes.ImageInfoKey{Repo: repo, Digest: digest}, w, r)
 	}
 
-	maxAge := time.Second
-	if imageInfo.Status == bitypes.ImageInfoStatusSucceeded {
-		maxAge = time.Hour * 24
+	switch imageInfo.Status {
+	case bitypes.ImageInfoStatusSucceeded:
+		w.Header().Set("Cache-Control", indexedCacheControl)
+	case bitypes.ImageInfoStatusPending, bitypes.ImageInfoStatusRunning:
+		w.Header().Set("Cache-Control", "public, max-age=1")
 	}
 
 	output := &HandleImageOutput{
@@ -543,7 +554,6 @@ func (h *handler) imageInfo(w http.ResponseWriter, r *http.Request, startIndexin
 		Manifest:        imageInfo.Manifest,
 	}
 
-	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", maxAge/time.Second))
 	return writeJSON(w, http.StatusOK, output)
 }
 
@@ -602,6 +612,7 @@ func (h *handler) handleListDirectory(w http.ResponseWriter, r *http.Request) er
 		return fmt.Errorf("listing directory: %w", err)
 	}
 
+	w.Header().Set("Cache-Control", indexedCacheControl)
 	return writeJSON(w, http.StatusOK, entries)
 }
 
@@ -637,6 +648,7 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) err
 
 	// Empty files, directories and links have no content to extract, and gztool rejects a zero length.
 	if entry.Hdr.Size == 0 {
+		w.Header().Set("Cache-Control", indexedCacheControl)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		return nil
 	}
@@ -694,6 +706,7 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) err
 	if strings.HasPrefix(mediaType, "text/") {
 		contentType = mime.FormatMediaType("text/plain", params)
 	}
+	w.Header().Set("Cache-Control", indexedCacheControl)
 	w.Header().Set("Content-Type", contentType)
 	w.Write(extracted)
 	return nil

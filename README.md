@@ -17,6 +17,29 @@ Empty directory-only branches are omitted.
 Older indexes without this object return HTTP 409 with an explanation that the
 image must be reindexed. Requests never trigger reindexing or migration.
 
+### API caching
+
+Successful directories, files (including empty files), and completed image
+info/metadata use `public, max-age=86400, s-maxage=2592000`: one day in browsers,
+30 days in CloudFront. These are not marked immutable because indexer fixes can
+change the representation. Corrected indexes may require CDN invalidation;
+already-cached browser responses can remain fresh for up to one day.
+
+Successful lookups cache for 60 seconds, tag lists for 300 seconds, and pending or
+running image status for one second. Failed indexing, registry errors (even HTTP
+200 error bodies), and other handler errors use `no-store`.
+
+`cloudfront.yml` sets minimum/default/error TTLs to zero. Its viewer-request
+function normalizes parameter order, encoding, digest-route image tags, default
+directory paths and hidden mode, and drops irrelevant parameters. Repository
+names are not qualified: they must still match existing storage keys. `Origin`
+remains in the cache key for CORS, along with normalized compression variants.
+
+Deploy the backend headers before the CloudFront template; both are required.
+Existing cached responses retain their old lifetimes unless invalidated. Test
+locally with `go test ./thelambda`, `node --test cloudfront.test.js` (Node 18+),
+and `cfn-lint cloudfront.yml`.
+
 ### Layer indexing
 
 The reader and concatenator use 3,538 MB ARM64 Lambdas (approximately two vCPUs);

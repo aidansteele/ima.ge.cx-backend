@@ -15,9 +15,9 @@ Resources:
     Properties:
       CachePolicyConfig:
         Name: !Sub ${AWS::StackName}-UseOnlyQueryString
-        Comment: Cache only by query string
-        DefaultTTL: 86400 # one day
-        MinTTL: 1 # one second
+        Comment: Cache explicit successes by API parameters, Origin and encoding
+        DefaultTTL: 0 # handlers must opt into caching
+        MinTTL: 0 # respect no-store
         MaxTTL: 31536000 # one year
         ParametersInCacheKeyAndForwardedToOrigin:
           CookiesConfig:
@@ -29,7 +29,8 @@ Resources:
             Headers:
               - Origin
           QueryStringsConfig:
-            QueryStringBehavior: all
+            QueryStringBehavior: whitelist
+            QueryStrings: [image, digest, path, hidden]
 
   OriginRequestPolicy:
     Type: AWS::CloudFront::OriginRequestPolicy
@@ -46,7 +47,57 @@ Resources:
             - X-Amzn-Trace-Id
             # - Accept-Encoding # this one is implied by cache policy settings above
         QueryStringsConfig:
-          QueryStringBehavior: all
+          QueryStringBehavior: none # cache-key parameters are forwarded automatically
+
+  NormalizeQuery:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub ${AWS::StackName}-NormalizeQuery
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Canonical API query strings before cache lookup
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          var indexed = ['/api/info', '/api/metadata', '/api/dir', '/api/file'].indexOf(uri) !== -1;
+          var filesystem = uri === '/api/dir' || uri === '/api/file';
+          if (!indexed && uri !== '/api/lookup' && uri !== '/api/tags') return request;
+
+          var keys = ['image'];
+          if (indexed) keys.push('digest');
+          if (filesystem) keys.push('path', 'hidden');
+          var values = {};
+          for (var i = 0; i < keys.length; i++) {
+            var key = keys[i];
+            // Match Go's Query().Get(): only the first duplicate matters.
+            var raw = request.querystring[key] ? request.querystring[key].value : '';
+            // Leave malformed input to the origin rather than repairing it.
+            if (raw.indexOf(';') !== -1) return request;
+            try {
+              values[key] = decodeURIComponent(raw.replace(/\+/g, ' '));
+            } catch (e) {
+              return request;
+            }
+          }
+          if (indexed) {
+            // Match parseImageQuery; do not qualify repository names, which
+            // are used verbatim in existing DynamoDB/S3 keys.
+            var colon = values.image.lastIndexOf(':');
+            if (colon > values.image.lastIndexOf('/')) values.image = values.image.slice(0, colon);
+          }
+          if (uri === '/api/dir' && !values.path) values.path = '/';
+          var query = [];
+          for (var j = 0; j < keys.length; j++) {
+            var name = keys[j];
+            if (name === 'hidden' && values[name] !== 'true') continue;
+            query.push(name + '=' + encodeURIComponent(values[name]));
+          }
+          // A string explicitly fixes parameter order, not just membership.
+          request.querystring = query.join('&');
+          return request;
+        }
 
   Distribution:
     Type: AWS::CloudFront::Distribution
@@ -66,8 +117,24 @@ Resources:
           Compress: true
           CachePolicyId: !Ref CachePolicy
           OriginRequestPolicyId: !Ref OriginRequestPolicy
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt NormalizeQuery.FunctionARN
 #          ResponseHeadersPolicyId: 60669652-455b-4ae9-85a4-c4c02393f86c # Managed-SimpleCORS
           TargetOriginId: web
+        # Errors must not hide newly completed indexes or recovered origins.
+        CustomErrorResponses:
+          - {ErrorCode: 400, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 403, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 404, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 405, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 414, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 416, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 500, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 501, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 502, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 503, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 504, ErrorCachingMinTTL: 0}
         Origins:
           - Id: web
             DomainName: !Ref Origin

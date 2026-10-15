@@ -2,14 +2,18 @@ package main
 
 import (
 	"browseimage/bitypes"
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/assert"
@@ -50,12 +54,8 @@ func TestImageMetadata(t *testing.T) {
 	config := []byte(`{"os":"linux","architecture":"arm64","variant":"v8"}`)
 	manifest := []byte(`{"layers":[{"size":1234},{"size":5678}]}`)
 
-	for _, indexed := range []bool{false, true} {
-		name := "not indexed"
-		if indexed {
-			name = "indexed"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, status := range []string{"", "SUCCEEDED", "PENDING", "RUNNING", "FAILED"} {
+		t.Run(status, func(t *testing.T) {
 			// A local AWS HTTP stub makes any attempt to write an index fail.
 			db := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("X-Amz-Target") != "DynamoDB_20120810.Query" {
@@ -64,7 +64,7 @@ func TestImageMetadata(t *testing.T) {
 					return
 				}
 				items := []any{}
-				if indexed {
+				if status != "" {
 					items = append(items, map[string]any{
 						"pk":          map[string]string{"S": "image#example/app"},
 						"sk":          map[string]string{"S": "digest#" + digest},
@@ -72,7 +72,7 @@ func TestImageMetadata(t *testing.T) {
 						"RawConfig":   map[string]any{"B": config},
 						"Manifest":    map[string]any{"B": manifest},
 						"ExecutionId": map[string]string{"S": "test"},
-						"Status":      map[string]string{"S": "SUCCEEDED"},
+						"Status":      map[string]string{"S": status},
 						"TotalSize":   map[string]string{"N": "6912"},
 						"Duration":    map[string]string{"N": "1000000000"},
 						"Retrieved":   map[string]string{"S": "2026-10-14T00:00:00Z"},
@@ -92,21 +92,34 @@ func TestImageMetadata(t *testing.T) {
 			}.Encode(), nil)
 			handleErrors(h.handleMetadata)(w, r)
 
-			if !indexed {
+			if status == "" {
 				assert.Equal(t, http.StatusNotFound, w.Code)
 				assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 				assert.Contains(t, w.Body.String(), "image has not been indexed")
 				return
 			}
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			wantCache := "no-store"
+			switch status {
+			case "SUCCEEDED":
+				wantCache = "public, max-age=86400, s-maxage=2592000"
+			case "PENDING", "RUNNING":
+				wantCache = "public, max-age=1"
+			}
+			assert.Equal(t, wantCache, w.Header().Get("Cache-Control"))
 			var output HandleImageOutput
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &output))
-			assert.Equal(t, bitypes.ImageInfoStatusSucceeded, output.Status)
+			assert.Equal(t, bitypes.ImageInfoStatus(status), output.Status)
 			assert.Equal(t, "example/app", output.Repo)
 			assert.Equal(t, digest, output.Digest)
 			assert.Equal(t, int64(6912), output.TotalSize)
 			assert.JSONEq(t, string(config), string(output.Config))
 			assert.JSONEq(t, string(manifest), string(output.Manifest))
+			// The interactive endpoint shares the completed/progress policy.
+			w = httptest.NewRecorder()
+			handleErrors(h.handleInfo)(w, r)
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, wantCache, w.Header().Get("Cache-Control"))
 		})
 	}
 }
@@ -147,7 +160,120 @@ func TestHiddenIndexAPI(t *testing.T) {
 				}
 				handleErrors(fn)(w, r)
 				assert.Equal(t, status, w.Code)
+				assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 				assert.Contains(t, w.Body.String(), message)
+			})
+		}
+	}
+}
+
+func TestRegistryCacheControl(t *testing.T) {
+	for _, endpoint := range []string{"lookup", "tags"} {
+		for _, failure := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/failure=%t", endpoint, failure), func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/v2/" {
+						w.WriteHeader(http.StatusOK)
+						return
+					}
+					if failure {
+						http.Error(w, "registry unavailable", http.StatusServiceUnavailable)
+						return
+					}
+					if endpoint == "tags" {
+						w.Header().Set("Content-Type", "application/json")
+						io.WriteString(w, `{"name":"example/app","tags":["v1","v2"]}`)
+					} else {
+						w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+						io.WriteString(w, `{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","size":42,"digest":"sha256:030eaf505bc7d39bfe1c485762603a95b5d43277f98cd3334d85e84547073abb","platform":{"os":"linux","architecture":"arm64"}}]}`)
+					}
+				}))
+				defer server.Close()
+				h := &handler{transport: http.DefaultTransport}
+				fn := h.handleLookup
+				wantCache := "public, max-age=60"
+				if endpoint == "tags" {
+					fn = h.handleTags
+					wantCache = "public, max-age=300"
+				}
+				if failure {
+					wantCache = "no-store"
+				}
+				w := httptest.NewRecorder()
+				r := httptest.NewRequest(http.MethodGet, "/api/"+endpoint+"?"+url.Values{
+					"image": {server.Listener.Addr().String() + "/example/app:v1"},
+				}.Encode(), nil)
+				handleErrors(fn)(w, r)
+				require.Equal(t, http.StatusOK, w.Code)
+				assert.Equal(t, wantCache, w.Header().Get("Cache-Control"))
+				var output struct {
+					Error   string
+					Tags    []string
+					Options []imageOption
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &output))
+				assert.Equal(t, failure, output.Error != "", w.Body.String())
+				if !failure && endpoint == "tags" {
+					assert.Equal(t, []string{"v1", "v2"}, output.Tags)
+				} else if !failure {
+					require.Len(t, output.Options, 1)
+					assert.Equal(t, "sha256:030eaf505bc7d39bfe1c485762603a95b5d43277f98cd3334d85e84547073abb", output.Options[0].Digest.String())
+				}
+			})
+		}
+	}
+}
+
+func TestFilesystemCacheControl(t *testing.T) {
+	const digest = "sha256:030eaf505bc7d39bfe1c485762603a95b5d43277f98cd3334d85e84547073abb"
+	for _, endpoint := range []string{"dir", "file"} {
+		for _, missing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/missing=%t", endpoint, missing), func(t *testing.T) {
+				var stream bytes.Buffer
+				encoder := eventstream.NewEncoder()
+				payload := []byte(`{"Hdr":{"Name":"empty","Size":0}}` + "\n")
+				if missing {
+					payload = nil
+				}
+				for _, event := range []string{"Records", "End"} {
+					var headers eventstream.Headers
+					headers.Set(":message-type", eventstream.StringValue("event"))
+					headers.Set(":event-type", eventstream.StringValue(event))
+					require.NoError(t, encoder.Encode(&stream, eventstream.Message{Headers: headers, Payload: payload}))
+					payload = nil
+				}
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+					w.Write(stream.Bytes())
+				}))
+				defer server.Close()
+				h := &handler{bucket: "bucket", s3: s3.New(s3.Options{
+					Region: "us-east-1", Credentials: aws.AnonymousCredentials{},
+					EndpointResolver: s3.EndpointResolverFromURL(server.URL), UsePathStyle: true,
+				})}
+				fn := h.handleListDirectory
+				if endpoint == "file" {
+					fn = h.handleFileContents
+				}
+				w := httptest.NewRecorder()
+				r := httptest.NewRequest(http.MethodGet, "/api/"+endpoint+"?"+url.Values{
+					"image": {"example/app"}, "digest": {digest}, "path": {"empty"}, "hidden": {"true"},
+				}.Encode(), nil)
+				handleErrors(fn)(w, r)
+				if missing && endpoint == "file" {
+					assert.Equal(t, http.StatusNotFound, w.Code)
+					assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+				} else {
+					require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+					assert.Equal(t, "public, max-age=86400, s-maxage=2592000", w.Header().Get("Cache-Control"))
+					if endpoint == "file" {
+						assert.Empty(t, w.Body.String())
+					} else if missing {
+						assert.JSONEq(t, "[]", w.Body.String())
+					} else {
+						assert.Contains(t, w.Body.String(), `"Name":"empty"`)
+					}
+				}
 			})
 		}
 	}
